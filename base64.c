@@ -1,5 +1,13 @@
 #include "base64.h"
 
+int
+base64_size(int input_size){
+	int code_size    = ((input_size * 4) / 3);
+	int padding_size = (input_size % 3) ? (3 - (input_size % 3)) : 0;
+	int crlfs_size   = 2 + (2 * (code_size + padding_size) / 72);
+	return code_size + padding_size + crlfs_size;
+}
+
 char
 *base64_encode(const unsigned char *input, int length)
 {

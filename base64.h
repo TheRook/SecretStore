@@ -14,6 +14,9 @@
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 
+int
+base64_size(int input_size);
+
 char
 *base64_decode(unsigned char *input, int length);
 

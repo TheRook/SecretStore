@@ -8,20 +8,26 @@
 #include <errno.h>
 #include <pthread.h>
 #include <arpa/inet.h>
+#include <semaphore.h>
+#include "main.h"
 
 #define KEY_SIZE 32
-#define INCOMING_BUF_SIZE 512
+#define TIMEOUT 200
 #define DB_PATH "store.db"
+#define THREAD_POOL_MIN 5
+#define THREAD_POOL_MAX 100
+
+
 
 int
 db_open(DB **store, const char* filename){
 	int db_err;
 
-	//DB_CREATE - Crete a new DB if one doesn't exist.
+	//DB_CREATE - Create a new DB if one doesn't exist.
 	//DB_INIT_CDB - create a a non-deadlocking multi-reader single writer access.
 	//DB_INIT_MPOOl - init a shared memory buffer pool sub-system.
 	//docs - http://docs.oracle.com/cd/E17076_02/html/programmer_reference/cam.html
-	u_int32_t flags = DB_CREATE | DB_INIT_CDB | DB_INIT_MPOOL;
+	u_int32_t flags = DB_CREATE;//| DB_INIT_CDB | DB_INIT_MPOOL;
 
 	db_err = db_create(store, NULL, 0);
 	if(db_err == 0){
@@ -36,9 +42,11 @@ db_open(DB **store, const char* filename){
 	return db_err;
 }
 
-struct proto_handler_args{
+struct thread_args{
 	int sock;
 	DB* store;
+	int permanent; // bool
+	sem_t thread_tracker;
 };
 
 char*
@@ -50,10 +58,8 @@ request_handler(DB* store, char* req){
 	if(strlen(req) >= KEY_SIZE){
 		key=get_secret(store, req);
 		if(!key){
-			printf("Not found.\n");
-		}else{
-			//error
-			//printf("%s\n", key);
+			// todo error
+			//printf("Not found.\n");
 		}
 	}else{
 		key_size = atoi(req);
@@ -61,7 +67,7 @@ request_handler(DB* store, char* req){
 			key = new_secret(store, key_size);
 			printf("%s\n", key);
 		}else{
-			//error
+			//todo error
 			//help();
 		}
 	}
@@ -69,63 +75,93 @@ request_handler(DB* store, char* req){
 	return key;
 }
 
-void*
-proto_handler(void* proto_handler_args){
-	int sock= ((struct proto_handler_args*)proto_handler_args)->sock;
-	DB* store=((struct proto_handler_args*)proto_handler_args)->store;
-
+void
+proto_handler(DB* store, int sock, int timeout){
 	int b64_size = base64_size(KEY_SIZE);
-	char* buffer = (char*)malloc(b64_size + 1); // TODO who will free
-	memset(buffer, 0, b64_size);
+	char* response;
+	char* request = (char*)malloc(b64_size + 1); // TODO who will free
 
 	int n;
 	char c;
-	int buf_i=0;
+	int read_idx=0;
+	int connection_active=1;
+
 	printf("About to read\n");
-    while(1) {
-    	n = read(sock, &c, 1);
-    	if(n == 0) continue; // maybe no data was sent yet, continue waiting
-    	if(n == -1) { printf("Error reading."); break;  } // TODO
+	while(connection_active) {
+		read_idx=0;
+		while(1) {
+			n = recv(sock, &c, 1, MSG_WAITALL);
+			if(n == 0 || n == -1) { // either an orderly shutdown or error occurred
+				connection_active=0;
+				break; // the client has disconnected
+			}
 
-    	if(buf_i >=b64_size){
-    		// out of bounds, TODO error
-    		break;
-    	}
+			if(read_idx >=b64_size){
+				// out of bounds, TODO error
+				break;
+			}
 
-    	if(c == '\n'){
-    		if(buffer[buf_i-1]=='\r'){
-    			buffer[buf_i-1]=0x00;
-    		}
+			if(c == '\n'){
+				if(request[read_idx-1]=='\r'){
+					request[read_idx-1]=0x00;
+				}else{
+					request[read_idx]=0x00;
+				}
+				break;
+			}
+			request[read_idx]=c;
+			read_idx++;
+		}
+		if(connection_active){
+			printf("%s\n", request);
 
-    		// performing a return from the start function of any thread results in an implicit call to pthread_exit()
-    		return request_handler(store, buffer);
-    	}
-    	buffer[buf_i]=c;
-        buf_i++;
-    }
+			response=request_handler(store, request);
+			if(response){
+				write(sock, response, strlen(response));
+				write(sock, "\r\n", 2);
+				free(response);
+				//bzero(request,b64_size);
+			}else{
+				//todo error
+			}
+		}
+	}
 
-    printf("%s", buffer);
-    bzero(buffer,b64_size);
+    free(request);
+}
+
+void* thread_entry_point(void *thread_args){
+	int sock= ((struct thread_args*)thread_args)->sock;
+	DB* store=((struct thread_args*)thread_args)->store;
+	int permanent=((struct thread_args*)thread_args)->permanent;
+	sem_t thread_tracker=((struct thread_args*)thread_args)->thread_tracker;
+	struct sockaddr client;
+	int client_size;
+	int conn;
+	while(1){
+		conn = accept( sock, (struct sockaddr *)&client, &client_size );
+		sem_post(&thread_tracker);//inc the semaphore
+		proto_handler(store, conn, 30);
+
+		if(!permanent){
+			break;
+		}
+	}
 }
 
 //
 int
-start_daemon(DB *store, int port, int thread_count){
-	int sock, con;
+start_daemon(DB *store, int port, int thread_pool_min, int thread_pool_max){
+	int sock;
 	struct sockaddr_in my_addr;
-	struct sockaddr client;
 	int optval = 1;
-	int client_size;
-	pthread_t * threads;
 
-	struct proto_handler_args args; // thread args
-	args.store=store;
+	sem_t thread_tracker;
 
-	threads = malloc(sizeof(pthread_t) * thread_count);
+	sem_init(&thread_tracker, 0, 0);
 
-	if(!threads){
-		return 1;
-	}
+	pthread_t* threads;
+	struct thread_args args;
 
 	my_addr.sin_family = AF_INET;
 	my_addr.sin_port = htons(port);
@@ -134,15 +170,39 @@ start_daemon(DB *store, int port, int thread_count){
 	sock = socket( PF_INET, SOCK_STREAM, 0 );
 	setsockopt( sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval) );
 	bind( sock, (struct sockaddr* )&my_addr, sizeof( struct sockaddr_in ) );
+
 	//10 BACK LOG'ed requests.
 	listen(sock, 10);
-	while(1){
-		con = accept( sock, (struct sockaddr *)&client, &client_size );
-		args.sock=con;
 
-		pthread_create(&threads[0], NULL, proto_handler, (void*)&args);
+	// create prefetch threads which will accept(sock)
+	args.store=store;
+	args.sock=sock;
+	args.permanent=1;
+	args.thread_tracker = thread_tracker;
+
+	threads = malloc(sizeof(pthread_t) * thread_pool_max);
+	if(!threads){
+		return 1;
 	}
 
+	int i;
+	for(i=0;i<thread_pool_min;i++){
+		pthread_create(&threads[i], NULL, thread_entry_point, (void*)&args);
+	}
+
+	// parent
+	// now we have 5 pthreads calling accept(sock)
+	// block until all threads are in use, so we can spawn another
+	// TODO
+	int j;
+	while(1){
+		sem_wait(&thread_tracker);
+		sem_getvalue(&thread_tracker, &j);
+		if(i <= thread_pool_max){
+			pthread_create(&threads[i], NULL, thread_entry_point, (void*)&args);
+			i++;
+		}
+	}
 	return 0;
 }
 
@@ -162,15 +222,21 @@ char * get_nonce(int size){
 char *
 get_secret(DB *store, char* key){
 	DBT lookup_key, secret;
+	int error;
+	char * ret = 0;
 	memset(&lookup_key, 0, sizeof(DBT));
 	memset(&secret, 0, sizeof(DBT));
 
 	lookup_key.data=key;
 	lookup_key.size=strlen(key) + 1;
 
-	store->get(store, NULL, &lookup_key, &secret, 0);
+	error = store->get(store, NULL, &lookup_key, &secret, 0);
 
-	return secret.data;
+	if(error != DB_NOTFOUND){
+		ret = (char *) malloc(secret.size+1);
+		memcpy(ret, secret.data, secret.size);
+	}
+	return ret;
 }
 
 char *
@@ -204,6 +270,7 @@ void
 help(){
 	printf("You need help son!\n");
 }
+
 
 int
 main(int argc, char *argv[]){
@@ -242,7 +309,7 @@ main(int argc, char *argv[]){
 		return 1;
 	}
 
-	start_daemon(store, 50100, 5);
+	start_daemon(store, 50100, 5, 100);
 
 	/* TODO: move to handle_request()
 	if(argc == 2){

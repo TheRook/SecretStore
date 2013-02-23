@@ -8,7 +8,8 @@
 #include <errno.h>
 #include <pthread.h>
 #include <arpa/inet.h>
-#include <semaphore.h>
+
+#include <sys/queue.h>
 #include "main.h"
 
 #define KEY_SIZE 32
@@ -16,8 +17,6 @@
 #define DB_PATH "store.db"
 #define THREAD_POOL_MIN 5
 #define THREAD_POOL_MAX 100
-
-
 
 int
 db_open(DB **store, const char* filename){
@@ -46,7 +45,9 @@ struct thread_args{
 	int sock;
 	DB* store;
 	int permanent; // bool
-	sem_t thread_tracker;
+	pthread_mutex_t thread_tracker;
+	int *thread_count;
+	//apr_queue_t *work_queue;
 };
 
 char*
@@ -130,35 +131,55 @@ proto_handler(DB* store, int sock, int timeout){
     free(request);
 }
 
+int
+start_connection(pthread_mutex_t thread_tracker, int * thread_count){
+	pthread_mutex_lock(&thread_tracker);
+	thread_count++;
+	pthread_mutex_unlock(&thread_tracker);
+}
+
+void
+end_connection(pthread_mutex_t thread_tracker, int * thread_count){
+	pthread_mutex_lock(&thread_tracker);
+	thread_count--;
+	pthread_mutex_unlock(&thread_tracker);
+}
+
 void* thread_entry_point(void *thread_args){
 	int sock= ((struct thread_args*)thread_args)->sock;
 	DB* store=((struct thread_args*)thread_args)->store;
 	int permanent=((struct thread_args*)thread_args)->permanent;
-	sem_t thread_tracker=((struct thread_args*)thread_args)->thread_tracker;
-	struct sockaddr client;
-	int client_size;
-	int conn;
-	while(1){
-		conn = accept( sock, (struct sockaddr *)&client, &client_size );
-		sem_post(&thread_tracker);//inc the semaphore
-		proto_handler(store, conn, 30);
-
-		if(!permanent){
-			break;
-		}
-	}
+	pthread_mutex_t thread_tracker=((struct thread_args*)thread_args)->thread_tracker;
+	int* thread_count=((struct thread_args*)thread_args)->thread_count;
+	start_connection(thread_tracker,thread_count);
+	//proto_handler blocks until the client leaves or we hit a timeout.
+	proto_handler(store, sock, 30);
+	end_connection(thread_tracker,thread_count);
 }
+
+struct conn_thread {
+    int conn;
+    LIST_ENTRY(conn_thread) pointers;
+};
+LIST_HEAD(conn_list, conn_thread);
 
 //
 int
 start_daemon(DB *store, int port, int thread_pool_min, int thread_pool_max){
-	int sock;
+	int sock, conn;
 	struct sockaddr_in my_addr;
 	int optval = 1;
+	struct sockaddr client;
+	int client_size;
+    LIST_HEAD(conn_list, conn_thread) head;
+    LIST_INIT(&head);
 
-	sem_t thread_tracker;
+	pthread_mutex_t thread_tracker;
+	int thread_count = thread_pool_min;
 
-	sem_init(&thread_tracker, 0, 0);
+
+	//thread_count is a thread-safe counter,  and is not used for blocking.
+	pthread_mutex_init(&thread_tracker, NULL);
 
 	pthread_t* threads;
 	struct thread_args args;
@@ -179,6 +200,8 @@ start_daemon(DB *store, int port, int thread_pool_min, int thread_pool_max){
 	args.sock=sock;
 	args.permanent=1;
 	args.thread_tracker = thread_tracker;
+	args.thread_count = &thread_count;
+	//args.work_queue = &work_queue;
 
 	threads = malloc(sizeof(pthread_t) * thread_pool_max);
 	if(!threads){
@@ -190,18 +213,12 @@ start_daemon(DB *store, int port, int thread_pool_min, int thread_pool_max){
 		pthread_create(&threads[i], NULL, thread_entry_point, (void*)&args);
 	}
 
-	// parent
-	// now we have 5 pthreads calling accept(sock)
-	// block until all threads are in use, so we can spawn another
-	// TODO
-	int j;
 	while(1){
-		sem_wait(&thread_tracker);
-		sem_getvalue(&thread_tracker, &j);
-		if(i <= thread_pool_max){
-			pthread_create(&threads[i], NULL, thread_entry_point, (void*)&args);
-			i++;
-		}
+		conn = accept( sock, (struct sockaddr *)&client, &client_size );
+	    //we may not need to use malloc...
+	    struct conn_thread *item = malloc(sizeof(struct conn_thread));
+	    item->conn = conn;
+	    LIST_INSERT_HEAD(&head, item, pointers);
 	}
 	return 0;
 }

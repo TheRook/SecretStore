@@ -43,8 +43,30 @@ struct proto_handler_args{
 
 char*
 request_handler(DB* store, char* req){
+	char * key=0;
+	int key_size=0;
+
 	printf("Got a request: '%s'\n", req);
-	return "unimplemented";
+	if(strlen(req) >= KEY_SIZE){
+		key=get_secret(store, req);
+		if(!key){
+			printf("Not found.\n");
+		}else{
+			//error
+			//printf("%s\n", key);
+		}
+	}else{
+		key_size = atoi(req);
+		if(key_size > 0){
+			key = new_secret(store, key_size);
+			printf("%s\n", key);
+		}else{
+			//error
+			//help();
+		}
+	}
+
+	return key;
 }
 
 void*
@@ -53,7 +75,7 @@ proto_handler(void* proto_handler_args){
 	DB* store=((struct proto_handler_args*)proto_handler_args)->store;
 
 	int b64_size = base64_size(KEY_SIZE);
-	char* buffer = (char*)malloc(b64_size); // TODO who will free
+	char* buffer = (char*)malloc(b64_size + 1); // TODO who will free
 	memset(buffer, 0, b64_size);
 
 	int n;
@@ -128,6 +150,7 @@ char * get_nonce(int size){
 	char * buf;
 	char * ret;
 	FILE * urand = fopen("/dev/urandom","r");
+	//not null-terminated,  so malloc the size,  not size+1!
 	buf = (char *)malloc(size);
 	fgets(buf, size, urand);
 	ret = base64_encode(buf, size);
@@ -185,7 +208,6 @@ help(){
 int
 main(int argc, char *argv[]){
 	DB *store;
-	char * key;
 	int db_err;
 	int key_size;
 
@@ -224,23 +246,7 @@ main(int argc, char *argv[]){
 
 	/* TODO: move to handle_request()
 	if(argc == 2){
-		if(strlen(argv[1]) >= KEY_SIZE){
-			key=get_secret(store, argv[1]);
-			if(!key){
-				printf("Not found.\n");
-			}else{
-				printf("%s\n", key);
-			}
-		}else{
-			key_size = atoi(argv[1]);
-			if(key_size > 0){
-				key = new_secret(store, key_size);
-				printf("%s\n", key);
-				free(key);
-			}else{
-				help();
-			}
-		}
+		request_hanlder(argv[1]);
 	}else{
 		help();
 	}*/

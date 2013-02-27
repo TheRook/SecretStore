@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <db.h>
+#include <leveldb/c.h>
+#include <event.h>
 #include "base64.h"
 
 //start_deamon
@@ -18,32 +19,28 @@
 #define THREAD_POOL_MIN 5
 #define THREAD_POOL_MAX 100
 
+
 int
-db_open(DB **store, const char* filename){
-	int db_err;
+db_open(leveldb_t * db, const char* filename){
+	leveldb_options_t *options;
+	leveldb_readoptions_t *roptions;
+	leveldb_writeoptions_t *woptions;
+	char *err = 0x00;
+	options = leveldb_options_create();
+	leveldb_options_set_create_if_missing(options, 1);
+	db = leveldb_open(options, filename, &err);
 
-	//DB_CREATE - Create a new DB if one doesn't exist.
-	//DB_INIT_CDB - create a a non-deadlocking multi-reader single writer access.
-	//DB_INIT_MPOOl - init a shared memory buffer pool sub-system.
-	//docs - http://docs.oracle.com/cd/E17076_02/html/programmer_reference/cam.html
-	u_int32_t flags = DB_CREATE;//| DB_INIT_CDB | DB_INIT_MPOOL;
-
-	db_err = db_create(store, NULL, 0);
-	if(db_err == 0){
-		db_err = (**store).open(*store,
-							 NULL,
-							 filename,
-							 NULL,
-							 DB_BTREE,
-							 flags,
-							 0);
+	if (err) {
+	  free(err);
+	  return 1;
 	}
-	return db_err;
+	return 0;
 }
+
 
 struct thread_args{
 	int sock;
-	DB* store;
+	leveldb_t* store;
 	int permanent; // bool
 	pthread_mutex_t thread_tracker;
 	int *thread_count;
@@ -51,7 +48,7 @@ struct thread_args{
 };
 
 char*
-request_handler(DB* store, char* req){
+request_handler(leveldb_t* store, char* req){
 	char * key=0;
 	int key_size=0;
 
@@ -77,7 +74,7 @@ request_handler(DB* store, char* req){
 }
 
 void
-proto_handler(DB* store, int sock, int timeout){
+proto_handler(leveldb_t* store, int sock, int timeout){
 	int b64_size = base64_size(KEY_SIZE);
 	char* response;
 	char* request = (char*)malloc(b64_size + 1); // TODO who will free
@@ -147,7 +144,7 @@ end_connection(pthread_mutex_t thread_tracker, int * thread_count){
 
 void* thread_entry_point(void *thread_args){
 	int sock= ((struct thread_args*)thread_args)->sock;
-	DB* store=((struct thread_args*)thread_args)->store;
+	leveldb_t* store=((struct thread_args*)thread_args)->store;
 	int permanent=((struct thread_args*)thread_args)->permanent;
 	pthread_mutex_t thread_tracker=((struct thread_args*)thread_args)->thread_tracker;
 	int* thread_count=((struct thread_args*)thread_args)->thread_count;
@@ -165,7 +162,7 @@ LIST_HEAD(conn_list, conn_thread);
 
 //
 int
-start_daemon(DB *store, int port, int thread_pool_min, int thread_pool_max){
+start_daemon(leveldb_t *store, int port, int thread_pool_min, int thread_pool_max){
 	int sock, conn;
 	struct sockaddr_in my_addr;
 	int optval = 1;
@@ -237,50 +234,31 @@ char * get_nonce(int size){
 }
 
 char *
-get_secret(DB *store, char* key){
-	DBT lookup_key, secret;
+get_secret(leveldb_t *store, char* key){
 	int error;
 	char * ret = 0;
-	memset(&lookup_key, 0, sizeof(DBT));
-	memset(&secret, 0, sizeof(DBT));
+	int read_len;
+	char * err;
+	char * resp;
+	leveldb_readoptions_t *roptions = leveldb_readoptions_create();
+	ret = leveldb_get(store, roptions, key, KEY_SIZE, &read_len, &err);
 
-	lookup_key.data=key;
-	lookup_key.size=strlen(key) + 1;
-
-	error = store->get(store, NULL, &lookup_key, &secret, 0);
-
-	if(error != DB_NOTFOUND){
-		ret = (char *) malloc(secret.size+1);
-		memcpy(ret, secret.data, secret.size);
-	}
 	return ret;
 }
 
 char *
-new_secret(DB *store, int size){
-	DBT key, secret;
-	int db_err;
-
-	memset(&key, 0, sizeof(DBT));
-	memset(&secret, 0, sizeof(DBT));
-
-	key.data = get_nonce(KEY_SIZE);
-	key.size = strlen(key.data) + 1;
-
-	secret.data = get_nonce(size);
-	secret.size = strlen(secret.data) + 1;
-
-	do{
-		db_err = store->put(store, NULL, &key, &secret, DB_NOOVERWRITE);
-		if(db_err == DB_KEYEXIST){
-			//Birthday paradox, we may need a new key.
-			free(key.data);
-			key.data = get_nonce(KEY_SIZE);
-		}
-	}while(db_err == DB_KEYEXIST);
-
-	free(secret.data);
-	return key.data;
+new_secret(leveldb_t *store, int size){
+	char *err = 0x00;
+	char * secret= get_nonce(size);
+	char * key= get_nonce(KEY_SIZE);
+	leveldb_writeoptions_t *woptions  = leveldb_writeoptions_create();
+	leveldb_put(store, woptions, key, KEY_SIZE, secret, size, &err);
+	if(err){
+		free(err);
+		//todo error
+	}
+	free(secret);
+	return key;
 }
 
 void
@@ -291,37 +269,13 @@ help(){
 
 int
 main(int argc, char *argv[]){
-	DB *store;
+	leveldb_t *store;
 	int db_err;
 	int key_size;
 
 	db_err = db_open(&store, DB_PATH);
 	if(db_err != 0){
 		printf("Error opening database at '%s'\n", DB_PATH);
-
-		switch(db_err){
-		case DB_LOCK_DEADLOCK:
-			printf("DB_LOCK_DEADLOCK\n");
-			break;
-		case DB_LOCK_NOTGRANTED:
-			printf("DB_LOCK_NOTGRANTED\n");
-			break;
-		case ENOENT:
-			printf("ENOENT\n");
-			break;
-		case DB_OLD_VERSION:
-			printf("DB_OLD_VERSION\n");
-			break;
-		case EEXIST:
-			printf("EEXIST\n");
-			break;
-		case EINVAL:
-			printf("EINVAL\n");
-			break;
-		case DB_REP_HANDLE_DEAD:
-			printf("DB_REP_HANDLE_DEAD\n");
-			break;
-		}
 		//error...
 		return 1;
 	}
@@ -335,9 +289,6 @@ main(int argc, char *argv[]){
 		help();
 	}*/
 
-	if(store){
-		store->close(store, 0);
-	}
 	return 0;
 }
 

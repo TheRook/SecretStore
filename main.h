@@ -9,8 +9,8 @@
 #define MAIN_H_
 
 char *
-get_secret(DB *store, char* key);
+get_secret(leveldb_t *store, char* key);
 char *
-new_secret(DB *store, int size);
+new_secret(leveldb_t *store, int size);
 
 #endif /* MAIN_H_ */

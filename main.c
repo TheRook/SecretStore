@@ -1,24 +1,25 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <leveldb/c.h>
-#include <event.h>
-#include "base64.h"
-
-//start_deamon
+/* For sockaddr_in */
+#include <netinet/in.h>
+/* For socket functions */
 #include <sys/socket.h>
-#include <errno.h>
-#include <pthread.h>
-#include <arpa/inet.h>
+/* For fcntl */
+#include <fcntl.h>
 
-#include <sys/queue.h>
+//#include <event2/event.h>
+#include <event.h>
+
+#include <assert.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <errno.h>
 #include "main.h"
 
-#define KEY_SIZE 32
-#define TIMEOUT 200
-#define DB_PATH "store.db"
-#define THREAD_POOL_MIN 5
-#define THREAD_POOL_MAX 100
+#define MAX_LINE 16384
 
+void do_read(evutil_socket_t fd, short events, void *arg);
+void do_write(evutil_socket_t fd, short events, void *arg);
 
 int
 db_open(leveldb_t * db, const char* filename){
@@ -32,23 +33,47 @@ db_open(leveldb_t * db, const char* filename){
 
 	if (err) {
 	  free(err);
+	  printf("error occurred opening db\n");
 	  return 1;
 	}
 	return 0;
 }
 
+void
+proto_handler(struct bufferevent *request, short events, void *arg){
+	leveldb_t* store=(leveldb_t*)arg;
 
-struct thread_args{
-	int sock;
-	leveldb_t* store;
-	int permanent; // bool
-	pthread_mutex_t thread_tracker;
-	int *thread_count;
-	//apr_queue_t *work_queue;
-};
+	//if (events & BEV_EVENT_CONNECTED) {
+
+	struct evbuffer *bucket= bufferevent_get_input(request);
+	struct evbuffer *output=bufferevent_get_output(request);
+
+	int b64_size = base64_size(KEY_SIZE);
+	char* response;
+	char* message = (char*)malloc(b64_size + 1); // TODO who will free
+
+	size_t n_read_out;
+	do {
+		message=evbuffer_readln(bucket, &n_read_out, EVBUFFER_EOL_CRLF);
+		if (n_read_out) {
+			//TODO
+			//response=request_handler_old(store, message);
+			if(response){
+				evbuffer_add_printf(output, "%s\r\n", response);
+				free(response);
+			}else{
+				//todo error
+			}
+		   free(message);
+		} // otherwise ebuffer_readln() encountered an error.
+	} while (message);
+	//free(request); // TODO
+
+}
+
 
 char*
-request_handler(leveldb_t* store, char* req){
+secret_handler(leveldb_t* store, char* req){
 	char * key=0;
 	int key_size=0;
 
@@ -71,153 +96,6 @@ request_handler(leveldb_t* store, char* req){
 	}
 
 	return key;
-}
-
-void
-proto_handler(leveldb_t* store, int sock, int timeout){
-	int b64_size = base64_size(KEY_SIZE);
-	char* response;
-	char* request = (char*)malloc(b64_size + 1); // TODO who will free
-
-	int n;
-	char c;
-	int read_idx=0;
-	int connection_active=1;
-
-	printf("About to read\n");
-	while(connection_active) {
-		read_idx=0;
-		while(1) {
-			n = recv(sock, &c, 1, MSG_WAITALL);
-			if(n == 0 || n == -1) { // either an orderly shutdown or error occurred
-				connection_active=0;
-				break; // the client has disconnected
-			}
-
-			if(read_idx >=b64_size){
-				// out of bounds, TODO error
-				break;
-			}
-
-			if(c == '\n'){
-				if(request[read_idx-1]=='\r'){
-					request[read_idx-1]=0x00;
-				}else{
-					request[read_idx]=0x00;
-				}
-				break;
-			}
-			request[read_idx]=c;
-			read_idx++;
-		}
-		if(connection_active){
-			printf("%s\n", request);
-
-			response=request_handler(store, request);
-			if(response){
-				write(sock, response, strlen(response));
-				write(sock, "\r\n", 2);
-				free(response);
-				//bzero(request,b64_size);
-			}else{
-				//todo error
-			}
-		}
-	}
-
-    free(request);
-}
-
-int
-start_connection(pthread_mutex_t thread_tracker, int * thread_count){
-	pthread_mutex_lock(&thread_tracker);
-	thread_count++;
-	pthread_mutex_unlock(&thread_tracker);
-}
-
-void
-end_connection(pthread_mutex_t thread_tracker, int * thread_count){
-	pthread_mutex_lock(&thread_tracker);
-	thread_count--;
-	pthread_mutex_unlock(&thread_tracker);
-}
-
-void* thread_entry_point(void *thread_args){
-	int sock= ((struct thread_args*)thread_args)->sock;
-	leveldb_t* store=((struct thread_args*)thread_args)->store;
-	int permanent=((struct thread_args*)thread_args)->permanent;
-	pthread_mutex_t thread_tracker=((struct thread_args*)thread_args)->thread_tracker;
-	int* thread_count=((struct thread_args*)thread_args)->thread_count;
-	start_connection(thread_tracker,thread_count);
-	//proto_handler blocks until the client leaves or we hit a timeout.
-	proto_handler(store, sock, 30);
-	end_connection(thread_tracker,thread_count);
-}
-
-struct conn_thread {
-    int conn;
-    LIST_ENTRY(conn_thread) pointers;
-};
-LIST_HEAD(conn_list, conn_thread);
-
-//
-int
-start_daemon(leveldb_t *store, int port, int thread_pool_min, int thread_pool_max){
-	int sock, conn;
-	struct sockaddr_in my_addr;
-	int optval = 1;
-	struct sockaddr client;
-	int client_size;
-    LIST_HEAD(conn_list, conn_thread) head;
-    LIST_INIT(&head);
-
-	pthread_mutex_t thread_tracker;
-	int thread_count = thread_pool_min;
-
-
-	//thread_count is a thread-safe counter,  and is not used for blocking.
-	pthread_mutex_init(&thread_tracker, NULL);
-
-	pthread_t* threads;
-	struct thread_args args;
-
-	my_addr.sin_family = AF_INET;
-	my_addr.sin_port = htons(port);
-	my_addr.sin_addr.s_addr = INADDR_ANY;
-
-	sock = socket( PF_INET, SOCK_STREAM, 0 );
-	setsockopt( sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval) );
-	bind( sock, (struct sockaddr* )&my_addr, sizeof( struct sockaddr_in ) );
-
-	//10 BACK LOG'ed requests.
-	listen(sock, 10);
-
-	// create prefetch threads which will accept(sock)
-	args.store=store;
-	args.sock=sock;
-	args.permanent=1;
-	args.thread_tracker = thread_tracker;
-	args.thread_count = &thread_count;
-	//args.work_queue = &work_queue;
-
-	threads = malloc(sizeof(pthread_t) * thread_pool_max);
-	if(!threads){
-		return 1;
-	}
-
-	int i;
-	for(i=0;i<thread_pool_min;i++){
-		pthread_create(&threads[i], NULL, thread_entry_point, (void*)&args);
-	}
-
-	while(1){
-		conn = accept( sock, (struct sockaddr *)&client, &client_size );
-	    //we may not need to use malloc...
-	    struct conn_thread *item = malloc(sizeof(struct conn_thread));
-	    item->conn = conn;
-	    LIST_INSERT_HEAD(&head, item, pointers);
-	}
-	return 0;
 }
 
 char * get_nonce(int size){
@@ -252,7 +130,7 @@ new_secret(leveldb_t *store, int size){
 	char * secret= get_nonce(size);
 	char * key= get_nonce(KEY_SIZE);
 	leveldb_writeoptions_t *woptions  = leveldb_writeoptions_create();
-	leveldb_put(store, woptions, key, KEY_SIZE, secret, size, &err);
+	leveldb_put(store, woptions, key, strlen(key), secret, strlen(secret), &err);
 	if(err){
 		free(err);
 		//todo error
@@ -261,36 +139,217 @@ new_secret(leveldb_t *store, int size){
 	return key;
 }
 
-void
-help(){
-	printf("You need help son!\n");
+
+
+char
+rot13_char(char c)
+{
+    /* We don't want to use isalpha here; setting the locale would change
+     * which characters are considered alphabetical. */
+    if ((c >= 'a' && c <= 'm') || (c >= 'A' && c <= 'M'))
+        return c + 13;
+    else if ((c >= 'n' && c <= 'z') || (c >= 'N' && c <= 'Z'))
+        return c - 13;
+    else
+        return c;
 }
 
+struct fd_state {
+    char buffer[MAX_LINE];
+    size_t buffer_used;
+
+    size_t n_written;
+    size_t write_upto;
+
+    struct event *read_event;
+    struct event *write_event;
+
+    leveldb_t* store;
+};
+
+struct fd_state *
+alloc_fd_state(leveldb_t* store, struct event_base *base, evutil_socket_t fd)
+{
+    struct fd_state *state = malloc(sizeof(struct fd_state));
+    state->store=store;
+
+    if (!state)
+        return NULL;
+    state->read_event = event_new(base, fd, EV_READ|EV_PERSIST, do_read, state);
+    if (!state->read_event) {
+        free(state);
+        return NULL;
+    }
+    state->write_event =
+        event_new(base, fd, EV_WRITE|EV_PERSIST, do_write, state);
+
+    if (!state->write_event) {
+        event_free(state->read_event);
+        free(state);
+        return NULL;
+    }
+
+    state->buffer_used = state->n_written = state->write_upto = 0;
+
+    assert(state->write_event);
+    return state;
+}
+
+void
+free_fd_state(struct fd_state *state)
+{
+    event_free(state->read_event);
+    event_free(state->write_event);
+    free(state);
+}
+
+void
+do_read(evutil_socket_t fd, short events, void *arg)
+{
+    struct fd_state *state = arg;
+    char buf[1024];
+    int i;
+    ssize_t result;
+    char* response;
+
+    while (1) {
+        assert(state->write_event);
+        result = recv(fd, buf, sizeof(buf), 0);
+        if (result <= 0)
+            break;
+
+
+        for (i=0; i < result; ++i)  {
+            if (buf[i] == '\n') {
+            	buf[i]=0x00;
+            	response=secret_handler(state->store, buf); // TODO free
+            	strncpy(state->buffer, response, strlen(response));
+
+                assert(state->write_event);
+                event_add(state->write_event, NULL);
+                state->write_upto = state->buffer_used;
+            }
+        }
+    }
+
+    if (result == 0) {
+        free_fd_state(state);
+    } else if (result < 0) {
+        if (errno == EAGAIN) // XXXX use evutil macro
+            return;
+        perror("recv");
+        free_fd_state(state);
+    }
+}
+
+void
+do_write(evutil_socket_t fd, short events, void *arg)
+{
+    struct fd_state *state = arg;
+
+    while (state->n_written < state->write_upto) {
+        ssize_t result = send(fd, state->buffer + state->n_written,
+                              state->write_upto - state->n_written, 0);
+        if (result < 0) {
+            if (errno == EAGAIN) // XXX use evutil macro
+                return;
+            free_fd_state(state);
+            return;
+        }
+        assert(result != 0);
+
+        state->n_written += result;
+    }
+
+    if (state->n_written == state->buffer_used)
+        state->n_written = state->write_upto = state->buffer_used = 1;
+
+    event_del(state->write_event);
+}
+
+struct accept_args {
+	struct event_base *base;
+	leveldb_t *store;
+};
+
+void
+do_accept(evutil_socket_t listener, short event, void *arg)
+{
+	struct accept_args* args=(struct accept_args*)arg;
+    struct event_base *base = args->base;
+    leveldb_t *store=args->store;
+
+    struct sockaddr_storage ss;
+    socklen_t slen = sizeof(ss);
+    int fd = accept(listener, (struct sockaddr*)&ss, &slen);
+    if (fd < 0) { // XXXX eagain??
+        perror("accept");
+    } else if (fd > FD_SETSIZE) {
+        close(fd); // XXX replace all closes with EVUTIL_CLOSESOCKET */
+    } else {
+        struct fd_state *state;
+        evutil_make_socket_nonblocking(fd);
+        state = alloc_fd_state(store, base, fd);
+        assert(state); /*XXX err*/
+        assert(state->write_event);
+        event_add(state->read_event, NULL);
+    }
+}
+
+void
+run(leveldb_t* store)
+{
+    evutil_socket_t listener;
+    struct sockaddr_in sin;
+    struct event_base *base;
+    struct event *listener_event;
+
+    base = event_base_new();
+    if (!base)
+        return; /*XXXerr*/
+
+    sin.sin_family = AF_INET;
+    sin.sin_addr.s_addr = 0;
+    sin.sin_port = htons(40713);
+
+    listener = socket(AF_INET, SOCK_STREAM, 0);
+    evutil_make_socket_nonblocking(listener);
+
+#ifndef WIN32
+    {
+        int one = 1;
+        setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    }
+#endif
+
+    if (bind(listener, (struct sockaddr*)&sin, sizeof(sin)) < 0) {
+        perror("bind");
+        return;
+    }
+
+    if (listen(listener, 16)<0) {
+        perror("listen");
+        return;
+    }
+
+    struct accept_args *args=malloc(sizeof(struct accept_args)); // TODO free
+    args->base=base;
+    args->store=store;
+    listener_event = event_new(base, listener, EV_READ|EV_PERSIST, do_accept, (void*)args);
+    /*XXX check it */
+    event_add(listener_event, NULL);
+
+    event_base_dispatch(base);
+}
 
 int
-main(int argc, char *argv[]){
-	leveldb_t *store;
-	int db_err;
-	int key_size;
+main(int c, char **v)
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
 
-	db_err = db_open(&store, DB_PATH);
-	if(db_err != 0){
-		printf("Error opening database at '%s'\n", DB_PATH);
-		//error...
-		return 1;
-	}
+    leveldb_t* store;
+    int err=db_open(&store, "store.db");
 
-	start_daemon(store, 50100, 5, 100);
-
-	/* TODO: move to handle_request()
-	if(argc == 2){
-		request_hanlder(argv[1]);
-	}else{
-		help();
-	}*/
-
-	return 0;
+    run(store);
+    return 0;
 }
-
-
-

@@ -20,7 +20,7 @@
 char *
 get_secret(leveldb_t *store, char* key);
 char *
-new_secret(leveldb_t *store, int size);
+new_secret(leveldb_t *store, size_t size);
 char*
 secret_handler(leveldb_t* store, char* req);
 

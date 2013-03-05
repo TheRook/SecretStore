@@ -26,13 +26,11 @@ void do_write(evutil_socket_t fd, short events, void *arg);
 
 
 void
-proto_handler(struct bufferevent *request, short events, void *arg){
-	leveldb_t* store=(leveldb_t*)arg;
-
-	//if (events & BEV_EVENT_CONNECTED) {
-
+proto_handler(struct bufferevent *request, short events, void* arg){
 	struct evbuffer *bucket= bufferevent_get_input(request);
 	struct evbuffer *output=bufferevent_get_output(request);
+
+	leveldb_t* store=global_store;
 
 	int b64_size = base64_size(KEY_SIZE);
 	char* response;
@@ -42,8 +40,7 @@ proto_handler(struct bufferevent *request, short events, void *arg){
 	do {
 		message=evbuffer_readln(bucket, &n_read_out, EVBUFFER_EOL_CRLF);
 		if (n_read_out) {
-			//TODO
-			//response=request_handler_old(store, message);
+			response=secret_handler(store, message);
 			if(response){
 				evbuffer_add_printf(output, "%s\r\n", response);
 				free(response);
@@ -62,10 +59,12 @@ char*
 secret_handler(leveldb_t* store, char* req){
 	char * key=0;
 	int key_size=0;
+	size_t value_len;
 
 	printf("Got a request: '%s'\n", req);
 	if(strlen(req) >= KEY_SIZE){
-		key=get_secret(store, req);
+		key=store_get(store, req, strlen(req), &value_len);
+		key[value_len+1]=0x00;
 		if(!key){
 			// todo error
 			//printf("Not found.\n");
@@ -94,22 +93,6 @@ char * get_nonce(int size){
 	ret = base64_encode(buf, size);
 	free(buf);
 	close(urand);
-	return ret;
-}
-
-char *
-get_secret(leveldb_t *store, char* key){
-	int error;
-	char * ret = 0;
-	size_t read_len;
-	char * err;
-	char * resp;
-
-	ret=store_get(store, key, strlen(key), &read_len);
-
-	/*leveldb_readoptions_t *roptions = leveldb_readoptions_create();
-	ret = leveldb_get(store, roptions, key, KEY_SIZE, &read_len, &err);*/
-
 	return ret;
 }
 
@@ -260,10 +243,16 @@ do_write(evutil_socket_t fd, short events, void *arg)
     event_del(state->write_event);
 }
 
-struct accept_args {
-	struct event_base *base;
-	leveldb_t *store;
-};
+
+
+static void cleanup_cb(struct bufferevent *bev, short events, void *ctx)
+{
+	if (events & BEV_EVENT_ERROR)
+		perror("Error from bufferevent");
+	if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
+		bufferevent_free(bev);
+	}
+}
 
 void
 do_accept(evutil_socket_t listener, short event, void *arg)
@@ -271,6 +260,7 @@ do_accept(evutil_socket_t listener, short event, void *arg)
 	struct accept_args* args=(struct accept_args*)arg;
     struct event_base *base = args->base;
     leveldb_t *store=args->store;
+    struct bufferevent* bev;
 
     struct sockaddr_storage ss;
     socklen_t slen = sizeof(ss);
@@ -280,12 +270,21 @@ do_accept(evutil_socket_t listener, short event, void *arg)
     } else if (fd > FD_SETSIZE) {
         close(fd); // XXX replace all closes with EVUTIL_CLOSESOCKET */
     } else {
-        struct fd_state *state;
-        evutil_make_socket_nonblocking(fd);
-        state = alloc_fd_state(store, base, fd);
-        assert(state); /*XXX err*/
-        assert(state->write_event);
-        event_add(state->read_event, NULL);
+    	evutil_make_socket_nonblocking(fd);
+    	/* set up the bufferevent structure -- give the fisherman
+				 a bin/bucket into which to put his fish */
+		bev = bufferevent_socket_new(base, fd,
+						BEV_OPT_CLOSE_ON_FREE);
+
+		/* set-up the callbacks on that buffer: the read callback
+			(in this case: buyfish) is executed when the client has
+			sent data which is available to be 'read' (hence the name
+			read callback) on the file descriptor -- in our analogy
+			the fishmonger will buy fish when there is fish in
+			bucket ready to be bought. */
+		bufferevent_setcb(bev, proto_handler, NULL, cleanup_cb, NULL);
+		bufferevent_enable(bev, EV_READ|EV_WRITE);
+
     }
 }
 
@@ -341,7 +340,7 @@ main(int c, char **v)
     setvbuf(stdout, NULL, _IONBF, 0);
 
     leveldb_t* store;
-    store=store_open("store.db");
+    global_store=store=store_open("store.db");
 
     run(store);
     return 0;

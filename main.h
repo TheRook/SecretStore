@@ -21,5 +21,15 @@ char *
 get_secret(leveldb_t *store, char* key);
 char *
 new_secret(leveldb_t *store, int size);
+char*
+secret_handler(leveldb_t* store, char* req);
+
+struct accept_args {
+	struct event_base *base;
+	leveldb_t *store;
+};
+
+
+leveldb_t* global_store;
 
 #endif /* MAIN_H_ */

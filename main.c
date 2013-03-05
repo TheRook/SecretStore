@@ -14,6 +14,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+
+#include "store.h"
+
 #include "main.h"
 
 #define MAX_LINE 16384
@@ -21,23 +24,6 @@
 void do_read(evutil_socket_t fd, short events, void *arg);
 void do_write(evutil_socket_t fd, short events, void *arg);
 
-int
-db_open(leveldb_t * db, const char* filename){
-	leveldb_options_t *options;
-	leveldb_readoptions_t *roptions;
-	leveldb_writeoptions_t *woptions;
-	char *err = 0x00;
-	options = leveldb_options_create();
-	leveldb_options_set_create_if_missing(options, 1);
-	db = leveldb_open(options, filename, &err);
-
-	if (err) {
-	  free(err);
-	  printf("error occurred opening db\n");
-	  return 1;
-	}
-	return 0;
-}
 
 void
 proto_handler(struct bufferevent *request, short events, void *arg){
@@ -115,11 +101,14 @@ char *
 get_secret(leveldb_t *store, char* key){
 	int error;
 	char * ret = 0;
-	int read_len;
+	size_t read_len;
 	char * err;
 	char * resp;
-	leveldb_readoptions_t *roptions = leveldb_readoptions_create();
-	ret = leveldb_get(store, roptions, key, KEY_SIZE, &read_len, &err);
+
+	ret=store_get(store, key, strlen(key), &read_len);
+
+	/*leveldb_readoptions_t *roptions = leveldb_readoptions_create();
+	ret = leveldb_get(store, roptions, key, KEY_SIZE, &read_len, &err);*/
 
 	return ret;
 }
@@ -129,12 +118,15 @@ new_secret(leveldb_t *store, int size){
 	char *err = 0x00;
 	char * secret= get_nonce(size);
 	char * key= get_nonce(KEY_SIZE);
-	leveldb_writeoptions_t *woptions  = leveldb_writeoptions_create();
+
+	store_put(store, key, strlen(key), secret, strlen(secret));
+
+	/*leveldb_writeoptions_t *woptions  = leveldb_writeoptions_create();
 	leveldb_put(store, woptions, key, strlen(key), secret, strlen(secret), &err);
 	if(err){
 		free(err);
 		//todo error
-	}
+	}*/
 	free(secret);
 	return key;
 }
@@ -227,6 +219,7 @@ do_read(evutil_socket_t fd, short events, void *arg)
 
                 assert(state->write_event);
                 event_add(state->write_event, NULL);
+                state->buffer_used=strlen(response);
                 state->write_upto = state->buffer_used;
             }
         }
@@ -348,7 +341,7 @@ main(int c, char **v)
     setvbuf(stdout, NULL, _IONBF, 0);
 
     leveldb_t* store;
-    int err=db_open(&store, "store.db");
+    store=store_open("store.db");
 
     run(store);
     return 0;

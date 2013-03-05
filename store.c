@@ -3,7 +3,6 @@
  */
 
 #include <leveldb/c.h>
-#include "bencode.h"
 #include "store.h"
 
 leveldb_t * store_open(char * name){
@@ -27,7 +26,7 @@ leveldb_t * store_open(char * name){
 char * store_get(leveldb_t * store, char * key,size_t key_size, size_t *read_len){
 	char * err=0x00;
 	leveldb_readoptions_t *read_options=leveldb_readoptions_create();
-	char * resp = leveldb_get(store,read_options, key, key_size, &read_len, &err);
+	char * resp = leveldb_get(store,read_options, key, key_size, read_len, &err);
 	leveldb_readoptions_destroy(read_options);
 	if(err){
 	//	printf("%s",err);

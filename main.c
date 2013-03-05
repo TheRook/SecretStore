@@ -24,10 +24,6 @@
 
 #define MAX_LINE 16384
 
-void do_read(evutil_socket_t fd, short events, void *arg);
-void do_write(evutil_socket_t fd, short events, void *arg);
-
-
 void
 proto_handler(struct bufferevent *request, short events, void* arg){
 	struct evbuffer *bucket= bufferevent_get_input(request);
@@ -109,12 +105,6 @@ new_secret(leveldb_t *store, int size){
 
 	store_put(store, key, KEY_SIZE, secret, size);
 
-	/*leveldb_writeoptions_t *woptions  = leveldb_writeoptions_create();
-	leveldb_put(store, woptions, key, strlen(key), secret, strlen(secret), &err);
-	if(err){
-		free(err);
-		//todo error
-	}*/
 	free(secret);
 	return key;
 }
@@ -146,109 +136,6 @@ struct fd_state {
 
     leveldb_t* store;
 };
-
-struct fd_state *
-alloc_fd_state(leveldb_t* store, struct event_base *base, evutil_socket_t fd)
-{
-    struct fd_state *state = malloc(sizeof(struct fd_state));
-    state->store=store;
-
-    if (!state)
-        return NULL;
-    state->read_event = event_new(base, fd, EV_READ|EV_PERSIST, do_read, state);
-    if (!state->read_event) {
-        free(state);
-        return NULL;
-    }
-    state->write_event =
-        event_new(base, fd, EV_WRITE|EV_PERSIST, do_write, state);
-
-    if (!state->write_event) {
-        event_free(state->read_event);
-        free(state);
-        return NULL;
-    }
-
-    state->buffer_used = state->n_written = state->write_upto = 0;
-
-    assert(state->write_event);
-    return state;
-}
-
-void
-free_fd_state(struct fd_state *state)
-{
-    event_free(state->read_event);
-    event_free(state->write_event);
-    free(state);
-}
-
-void
-do_read(evutil_socket_t fd, short events, void *arg)
-{
-    struct fd_state *state = arg;
-    char buf[1024];
-    int i;
-    ssize_t result;
-    char* response;
-
-    while (1) {
-        assert(state->write_event);
-        result = recv(fd, buf, sizeof(buf), 0);
-        if (result <= 0)
-            break;
-
-
-        for (i=0; i < result; ++i)  {
-            if (buf[i] == '\n') {
-            	buf[i]=0x00;
-            	response=secret_handler(state->store, buf); // TODO free
-            	strncpy(state->buffer, response, strlen(response));
-
-                assert(state->write_event);
-                event_add(state->write_event, NULL);
-                state->buffer_used=strlen(response);
-                state->write_upto = state->buffer_used;
-            }
-        }
-    }
-
-    if (result == 0) {
-        free_fd_state(state);
-    } else if (result < 0) {
-        if (errno == EAGAIN) // XXXX use evutil macro
-            return;
-        perror("recv");
-        free_fd_state(state);
-    }
-}
-
-void
-do_write(evutil_socket_t fd, short events, void *arg)
-{
-    struct fd_state *state = arg;
-
-    while (state->n_written < state->write_upto) {
-        ssize_t result = send(fd, state->buffer + state->n_written,
-                              state->write_upto - state->n_written, 0);
-        if (result < 0) {
-            if (errno == EAGAIN) // XXX use evutil macro
-                return;
-            free_fd_state(state);
-            return;
-        }
-        assert(result != 0);
-
-        state->n_written += result;
-    }
-
-    if (state->n_written == state->buffer_used)
-        state->n_written = state->write_upto = state->buffer_used = 1;
-
-    event_del(state->write_event);
-}
-
-
 
 static void cleanup_cb(struct bufferevent *bev, short events, void *ctx)
 {

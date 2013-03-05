@@ -1,5 +1,3 @@
-//libglib2.0-dev
-
 /* For sockaddr_in */
 #include <netinet/in.h>
 /* For socket functions */

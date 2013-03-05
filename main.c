@@ -1,3 +1,5 @@
+//libglib2.0-dev
+
 /* For sockaddr_in */
 #include <netinet/in.h>
 /* For socket functions */
@@ -14,6 +16,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <glib-2.0/glib.h>
 
 #include "store.h"
 
@@ -57,52 +60,54 @@ proto_handler(struct bufferevent *request, short events, void* arg){
 
 char*
 secret_handler(leveldb_t* store, char* req){
-	char * key=0;
+	char * resp=0;
+	char * key_bin;
+	char * value;
+	size_t key_len;
 	int key_size=0;
 	size_t value_len;
 
 	printf("Got a request: '%s'\n", req);
 	if(strlen(req) >= KEY_SIZE){
-		key=store_get(store, req, strlen(req), &value_len);
-		key[value_len+1]=0x00;
-		if(!key){
+		key_bin = g_base64_decode(req, &key_len);
+		resp = store_get(store, key_bin, key_len, &value_len);
+
+		if(!value){
 			// todo error
 			//printf("Not found.\n");
 		}
 	}else{
 		key_size = atoi(req);
 		if(key_size > 0){
-			key = new_secret(store, key_size);
-			printf("%s\n", key);
+			resp = new_secret(store, key_size);
+			printf("%s\n", resp);
 		}else{
 			//todo error
 			//help();
 		}
 	}
 
-	return key;
+	return resp;
 }
 
+//the return value is not null terminated.
 char * get_nonce(int size){
 	char * buf;
-	char * ret;
 	FILE * urand = fopen("/dev/urandom","r");
 	//not null-terminated,  so malloc the size,  not size+1!
 	buf = (char *)malloc(size);
 	fgets(buf, size, urand);
-	ret = base64_encode(buf, size);
-	free(buf);
 	close(urand);
-	return ret;
+	return buf;
 }
 
 char *
 new_secret(leveldb_t *store, int size){
 	char *err = 0x00;
-	char * secret= get_nonce(size);
-	char * key= get_nonce(KEY_SIZE);
+	char * secret = get_nonce(size);
+	char * key = get_nonce(KEY_SIZE);
 
-	store_put(store, key, strlen(key), secret, strlen(secret));
+	store_put(store, key, KEY_SIZE, secret, size);
 
 	/*leveldb_writeoptions_t *woptions  = leveldb_writeoptions_create();
 	leveldb_put(store, woptions, key, strlen(key), secret, strlen(secret), &err);

@@ -16,9 +16,10 @@
 #define THREAD_POOL_MIN 5
 #define THREAD_POOL_MAX 100
 #define MAX_LINE 100
+#define MAX_SECRET_SIZE 1024
 
-char *
-get_secret(leveldb_t *store, char* key);
+char*
+get_secret(leveldb_t* store, char* key_bin, size_t key_len);
 char *
 new_secret(leveldb_t *store, size_t size);
 char*

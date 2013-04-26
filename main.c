@@ -17,10 +17,19 @@
 #include <glib-2.0/glib.h>
 
 #include "store.h"
-
+#include "error.h"
 #include "main.h"
 
 #define MAX_LINE 16384
+
+void print_hex(char* label, char* ptr, int bytes) {
+	printf("hex for %s:\n", label);
+	int i=0;
+	for(i=0;i<bytes;i++){
+		printf("%x ", ptr[i]);
+	}
+	printf("\n");
+}
 
 void
 proto_handler(struct bufferevent *request, short events, void* arg){
@@ -32,62 +41,94 @@ proto_handler(struct bufferevent *request, short events, void* arg){
 	char* response;
 	char* message;
 	size_t n_read_out;
+	int is_error=0;
+	size_t secret_size;
+	char * secret_key;
+	size_t key_len;
 
 	message=evbuffer_readln(bucket, &n_read_out, EVBUFFER_EOL_CRLF);
 	if (n_read_out) {
-		response=secret_handler(store, message);
-		if(response){
-			evbuffer_add_printf(output, "%s\r\n", response);
-			free(response);
+		// if the message is valid base64 and the message isn't a key,
+		// and 1024 is the largest key.
+		if(!is_valid_charset(message)){
+			is_error=1;
+			response=INVALID_REQUEST;
+		}else if(n_read_out > 4){
+			secret_key=g_base64_decode(message, &key_len);
+			if(key_len == KEY_SIZE){
+				response=get_secret(store, secret_key, key_len);
+				if(!response){
+					is_error=1;
+					response=KEY_NOT_EXIST;
+				}
+			} else {
+				is_error=1;
+				response=INVALID_KEY_SIZE;
+			}
+		}else if(n_read_out > KEY_SIZE){
+			is_error = 1;
+		    response = REQUEST_TOO_LARGE;
 		}else{
-			//todo error
+			secret_size=atoi(message);
+			if(secret_size > 0 && secret_size <= MAX_SECRET_SIZE) {
+				response=new_secret(store, secret_size);
+			} else {
+				is_error=1;
+				response=INVALID_SECRET_SIZE;
+			}
 		}
+	} else {
+		// otherwise ebuffer_readln() encountered an error
+		is_error=1;
+		response=EMPTY_REQUEST;
+	}
 
-	} // otherwise ebuffer_readln() encountered an error.
-	if(message) free(message);
+	if(message)
+		free(message);
+
+	evbuffer_add_printf(output, "%s\r\n", response);
+	if(!is_error)//TODO:  is a free a free?  or do we need a g_free()?
+		free(response);
+}
+
+int
+is_valid_charset(char* str) {
+	int i;
+	for(i=0;i<strlen(str);i++){
+		if( ! ((str[i] >= 'a' && str[i] <= 'z') ||
+			   (str[i] >= 'A' && str[i] <= 'Z') ||
+			   (str[i] >= '0' && str[i] <= '9') ||
+			   str[i] == '/' || str[i] == '=' || str[i] == '+')) {
+			return 0;
+		}
+	}
+	return 1;
 }
 
 char*
-secret_handler(leveldb_t* store, char* req){
+get_secret(leveldb_t* store, char* key_bin, size_t key_len) {
 	char * resp=0;
 	char * resp_b64=0;
-	char * key_bin=0;
-	size_t key_len;
-	size_t secret_size;
 	size_t value_len;
 
-	printf("Got a request: '%s'\n", req);
-	if(strlen(req) >= KEY_SIZE){
-		key_bin = g_base64_decode(req, &key_len);
-		resp = store_get(store, key_bin, key_len, &value_len);
-		if(!resp){
-			// todo how to indicate not found in protocol?
-			printf("Not found.\n");
-		} else {
-			resp_b64=g_base64_encode(resp, value_len);
-		}
-	}else{
-		secret_size = atoi(req);
-		if(secret_size > 0){
-			resp = new_secret(store, secret_size);
-			resp_b64=g_base64_encode(resp, KEY_SIZE);
-			printf("%s\n", resp_b64);
-		}else{
-			//todo error
-			//help();
-		}
+	//printf("get_secret(): key_bin: %s\n key_len: %d\n\n", key_bin, key_len);
+	print_hex("get_secret key_bin", key_bin, key_len);
+	resp = store_get(store, key_bin, key_len, &value_len);
+	if(resp){
+		resp_b64=g_base64_encode(resp, value_len);
+		free(resp);
 	}
-
+	g_free(key_bin);
 	return resp_b64;
 }
 
 //the return value is not null terminated.
-char * get_nonce(int size){
+char *
+get_nonce(int size){
 	char * buf;
 	FILE * urand = fopen("/dev/urandom","r");
-	//not null-terminated,  so malloc the size,  not size+1!
-	buf = (char *)malloc(size);
-	fgets(buf, size, urand);
+	buf = (char *)malloc(size + 1);
+	fgets(buf, size + 1, urand);
 
 	fclose(urand);
 	return buf;
@@ -97,11 +138,16 @@ char *
 new_secret(leveldb_t *store, size_t size){
 	char * secret = get_nonce(size);
 	char * key = get_nonce(KEY_SIZE);
+	char * resp=0;
 
+	//printf("new_secret(): key: %s\nsecret: %s\nsize: %d\n\n", key, secret, size);
 	store_put(store, key, KEY_SIZE, secret, size);
+	resp = g_base64_encode(key, KEY_SIZE);
 
 	free(secret);
-	return key;
+	free(key);
+
+	return resp;
 }
 
 static void cleanup_cb(struct bufferevent *bev, short events, void *ctx)
@@ -151,8 +197,10 @@ run(leveldb_t* store)
     struct event *listener_event;
 
     base = event_base_new();
-    if (!base)
-        return; /* TODO err*/
+    if (!base) {
+    	fprintf(stderr, "Cannot initialize libevent. Exiting");
+    	return;
+    }
 
     sin.sin_family = AF_INET;
     sin.sin_addr.s_addr = 0;
@@ -174,11 +222,10 @@ run(leveldb_t* store)
         return;
     }
 
-    struct accept_args *args=malloc(sizeof(struct accept_args)); // TODO free
+    struct accept_args *args=malloc(sizeof(struct accept_args));
     args->base=base;
     args->store=store;
     listener_event = event_new(base, listener, EV_READ|EV_PERSIST, do_accept, (void*)args);
-    /* TODO check it */
     event_add(listener_event, NULL);
 
     event_base_dispatch(base);

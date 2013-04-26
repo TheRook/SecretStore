@@ -4,10 +4,7 @@
 #include <sys/socket.h>
 /* For fcntl */
 #include <fcntl.h>
-
-//#include <event2/event.h>
 #include <event.h>
-
 #include <assert.h>
 #include <unistd.h>
 #include <string.h>
@@ -37,7 +34,6 @@ proto_handler(struct bufferevent *request, short events, void* arg){
 	struct evbuffer *output=bufferevent_get_output(request);
 
 	leveldb_t* store=global_store;
-	//int b64_size = base64_size(KEY_SIZE);
 	char* response;
 	char* message;
 	size_t n_read_out;

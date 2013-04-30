@@ -60,6 +60,7 @@ parse_config(char* config_file_path) {
 
 void
 free_config_strings(struct parsed_config* config) {
-	free(config->db_path);
+	if(config->db_path)
+		free(config->db_path);
 	config->db_path=0;
 }

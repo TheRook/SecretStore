@@ -18,15 +18,6 @@
 #include "config.h"
 #include "main.h"
 
-void
-print_hex(char* label, char* ptr, int bytes) {
-	printf("hex for %s:\n", label);
-	int i=0;
-	for(i=0;i<bytes;i++){
-		printf("%x ", ptr[i]);
-	}
-	printf("\n");
-}
 
 void
 proto_handler(struct bufferevent *request, short events, void* arg){
@@ -107,8 +98,6 @@ get_secret(leveldb_t* store, char* key_bin, size_t key_len) {
 	char* resp_b64=0;
 	size_t value_len;
 
-	//printf("get_secret(): key_bin: %s\n key_len: %d\n\n", key_bin, key_len);
-	print_hex("get_secret key_bin", key_bin, key_len);
 	resp = store_get(store, key_bin, key_len, &value_len);
 	if(resp){
 		resp_b64=g_base64_encode(resp, value_len);
@@ -235,7 +224,7 @@ main(int c, char** v) {
 
 	config = parse_config(CONFIG_FILE_PATH);
 	if(!config.is_valid){
-		fprintf(stderr, "Error occurred when reading config file, exiting.\n");
+		fprintf(stderr, "Error occurred when reading config file %s, exiting.\n", CONFIG_FILE_PATH);
 		return 1;
 	}
 

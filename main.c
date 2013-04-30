@@ -15,11 +15,11 @@
 
 #include "store.h"
 #include "error.h"
+#include "config.h"
 #include "main.h"
 
-#define MAX_LINE 16384
-
-void print_hex(char* label, char* ptr, int bytes) {
+void
+print_hex(char* label, char* ptr, int bytes) {
 	printf("hex for %s:\n", label);
 	int i=0;
 	for(i=0;i<bytes;i++){
@@ -39,7 +39,7 @@ proto_handler(struct bufferevent *request, short events, void* arg){
 	size_t n_read_out;
 	int is_error=0;
 	size_t secret_size;
-	char * secret_key;
+	char* secret_key;
 	size_t key_len;
 
 	message=evbuffer_readln(bucket, &n_read_out, EVBUFFER_EOL_CRLF);
@@ -103,8 +103,8 @@ is_valid_charset(char* str) {
 
 char*
 get_secret(leveldb_t* store, char* key_bin, size_t key_len) {
-	char * resp=0;
-	char * resp_b64=0;
+	char* resp=0;
+	char* resp_b64=0;
 	size_t value_len;
 
 	//printf("get_secret(): key_bin: %s\n key_len: %d\n\n", key_bin, key_len);
@@ -121,8 +121,8 @@ get_secret(leveldb_t* store, char* key_bin, size_t key_len) {
 //the return value is not null terminated.
 char *
 get_nonce(int size){
-	char * buf;
-	FILE * urand = fopen("/dev/urandom","r");
+	char* buf;
+	FILE* urand = fopen("/dev/urandom","r");
 	buf = (char *)malloc(size + 1);
 	fgets(buf, size + 1, urand);
 
@@ -132,9 +132,9 @@ get_nonce(int size){
 
 char *
 new_secret(leveldb_t *store, size_t size){
-	char * secret = get_nonce(size);
-	char * key = get_nonce(KEY_SIZE);
-	char * resp=0;
+	char* secret = get_nonce(size);
+	char* key = get_nonce(KEY_SIZE);
+	char* resp=0;
 
 	//printf("new_secret(): key: %s\nsecret: %s\nsize: %d\n\n", key, secret, size);
 	store_put(store, key, KEY_SIZE, secret, size);
@@ -159,8 +159,7 @@ void
 do_accept(evutil_socket_t listener, short event, void *arg)
 {
 	struct accept_args* args=(struct accept_args*)arg;
-    struct event_base *base = args->base;
-    leveldb_t *store=args->store;
+    struct event_base* base = args->base;
     struct bufferevent* bev;
 
     struct sockaddr_storage ss;
@@ -185,12 +184,12 @@ do_accept(evutil_socket_t listener, short event, void *arg)
 }
 
 void
-run(leveldb_t* store)
+run(leveldb_t* store, int port)
 {
     evutil_socket_t listener;
     struct sockaddr_in sin;
-    struct event_base *base;
-    struct event *listener_event;
+    struct event_base* base;
+    struct event* listener_event;
 
     base = event_base_new();
     if (!base) {
@@ -200,7 +199,7 @@ run(leveldb_t* store)
 
     sin.sin_family = AF_INET;
     sin.sin_addr.s_addr = 0;
-    sin.sin_port = htons(40713);
+    sin.sin_port = htons(port);
 
     listener = socket(AF_INET, SOCK_STREAM, 0);
     evutil_make_socket_nonblocking(listener);
@@ -224,18 +223,28 @@ run(leveldb_t* store)
     listener_event = event_new(base, listener, EV_READ|EV_PERSIST, do_accept, (void*)args);
     event_add(listener_event, NULL);
 
+    printf("Server started on port %d...\n", port);
     event_base_dispatch(base);
     free(args);
 }
 
 int
-main(int c, char **v)
-{
-    setvbuf(stdout, NULL, _IONBF, 0);
-
+main(int c, char** v) {
+	struct parsed_config config;
     leveldb_t* store;
-    global_store=store=store_open("store.db");
 
-    run(store);
+	config = parse_config(CONFIG_FILE_PATH);
+	if(!config.is_valid){
+		fprintf(stderr, "Error occurred when reading config file, exiting.\n");
+		return 1;
+	}
+
+    setvbuf(stdout, NULL, _IONBF, 0);
+    printf("Opening database at %s...\n", config.db_path);
+    global_store=store=store_open(config.db_path);
+
+    run(store, config.port);
+
+    free_config_strings(&config);
     return 0;
 }

@@ -58,6 +58,7 @@
 									<listOptionValue builtIn="false" value="leveldb"/>
 									<listOptionValue builtIn="false" value="crypto"/>
 									<listOptionValue builtIn="false" srcPrefixMapping="" srcRootPath="" value="glib-2.0"/>
+									<listOptionValue builtIn="false" srcPrefixMapping="" srcRootPath="" value="config"/>
 								</option>
 								<inputType id="cdt.managedbuild.tool.gnu.cpp.linker.input.672863993" superClass="cdt.managedbuild.tool.gnu.cpp.linker.input">
 									<additionalInput kind="additionalinputdependency" paths="$(USER_OBJS)"/>

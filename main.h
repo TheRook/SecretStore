@@ -17,6 +17,7 @@
 #define THREAD_POOL_MAX 100
 #define MAX_LINE 100
 #define MAX_SECRET_SIZE 1024
+#define CONFIG_FILE_PATH "secretstore.conf"
 
 char*
 get_secret(leveldb_t* store, char* key_bin, size_t key_len);

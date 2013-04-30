@@ -135,8 +135,7 @@ new_secret(leveldb_t *store, size_t size){
 	return resp;
 }
 
-static void cleanup_cb(struct bufferevent *bev, short events, void *ctx)
-{
+static void cleanup_cb(struct bufferevent *bev, short events, void *ctx){
 	if (events & BEV_EVENT_ERROR)
 		perror("Error from bufferevent");
 	if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
@@ -145,8 +144,7 @@ static void cleanup_cb(struct bufferevent *bev, short events, void *ctx)
 }
 
 void
-do_accept(evutil_socket_t listener, short event, void *arg)
-{
+do_accept(evutil_socket_t listener, short event, void *arg){
 	struct accept_args* args=(struct accept_args*)arg;
     struct event_base* base = args->base;
     struct bufferevent* bev;
@@ -173,8 +171,7 @@ do_accept(evutil_socket_t listener, short event, void *arg)
 }
 
 void
-run(leveldb_t* store, int port)
-{
+run(leveldb_t* store, int port){
     evutil_socket_t listener;
     struct sockaddr_in sin;
     struct event_base* base;

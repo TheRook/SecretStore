@@ -12,7 +12,7 @@
 #define INVALID_SECRET_SIZE "error: new secret size invalid"
 #define KEY_NOT_EXIST "error: key not found during lookup"
 #define INVALID_REQUEST "error: request contains invalid characters"
-#define EMPTY_REQUEST "error: zero length request"
+#define EMPTY_REQUEST "error: zero length request or missing newline sequence"
 #define REQUEST_TOO_LARGE "error: the request is too large"
 
 #endif /* ERROR_H_ */

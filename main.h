@@ -32,6 +32,4 @@ struct accept_args {
 };
 
 
-leveldb_t* global_store;
-
 #endif /* MAIN_H_ */

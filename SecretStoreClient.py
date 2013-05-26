@@ -5,6 +5,9 @@ import base64
 host='localhost'
 port=40713
 
+class SecretStore_exception(Exception):
+	pass
+
 class SecretStoreClient:
 	def __init__(self, host, port):
 		self.host=host
@@ -33,9 +36,9 @@ class SecretStoreClient:
 		return self.get_response("%s\r\n" % key_b64)
 	
 	def check_error(self, resp):
-		if "error" in resp:
-			raise Exception(resp)
-	
+		if resp.startswith("error:"):
+			raise SecretStore_exception(resp)
+
 store=SecretStoreClient(host, port)
 k=store.new_secret(128)
 v=store.get_secret(k)

@@ -21,10 +21,11 @@
 
 void
 proto_handler(struct bufferevent *request, short events, void* arg){
+	struct accept_args* args=(struct accept_args*)arg;
+	leveldb_t* store=(leveldb_t*)args->store;
+	char buffer_test[1];
 	struct evbuffer *bucket= bufferevent_get_input(request);
 	struct evbuffer *output=bufferevent_get_output(request);
-
-	leveldb_t* store=global_store;
 	char* response;
 	char* message;
 	size_t n_read_out;
@@ -34,7 +35,10 @@ proto_handler(struct bufferevent *request, short events, void* arg){
 	size_t key_len;
 
 	message=evbuffer_readln(bucket, &n_read_out, EVBUFFER_EOL_CRLF);
+
 	if (n_read_out) {
+		//strcpy(buffer_test,message);
+		//printf("Message: %s\n",message);
 		// if the message is valid base64 and the message isn't a key,
 		// and 1024 is the largest key.
 		if(!is_valid_charset(message)){
@@ -165,7 +169,7 @@ do_accept(evutil_socket_t listener, short event, void *arg){
 		 * (in this case: proto_handler) is executed when the client has
 		 * sent data which is available to be read on the fd
 		 */
-		bufferevent_setcb(bev, proto_handler, NULL, cleanup_cb, NULL);
+		bufferevent_setcb(bev, proto_handler, NULL, cleanup_cb, arg);
 		bufferevent_enable(bev, EV_READ|EV_WRITE);
 
     }
@@ -204,6 +208,7 @@ run(leveldb_t* store, int port){
         return;
     }
 
+    //args on the stack?
     struct accept_args *args=malloc(sizeof(struct accept_args));
     args->base=base;
     args->store=store;
@@ -228,10 +233,9 @@ main(int c, char** v) {
 
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("Opening database at %s...\n", config.db_path);
-    global_store=store=store_open(config.db_path);
-
+    store=store_open(config.db_path);
     run(store, config.port);
-
+    //malloc'ed by parse_config(),  free it here:
     free_config_strings(&config);
     return 0;
 }

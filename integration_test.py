@@ -15,30 +15,18 @@ class TestSecretStore(unittest.TestCase):
 	ClassIsSetup = False
 
 	def setUp(self):
-		# If it was not setup yet, do it
-		if not self.ClassIsSetup:
-			print "Initializing environment"
-			# run the real setup
-			self.setupClass()
-			# remember that it was setup already
-			self.__class__.ClassIsSetup = True
-	
-	def setupClass(self):
-		# Do the real setup
-		unittest.TestCase.setUp(self)
-		# you want to have persistent things to test
-		#self.__class__.myclass = MyClass()
-		# (you can call this later with self.myclass)
-		print("Connecting to %s:%s...\n" % (host, port))
-		self.__class__.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		self.__class__.s.connect((host, port))
-		print("Connected!")
+		self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.s.connect((host, port))
+		#print("Connected!")
+		
+	def tearDown(self):
+		self.s.close()
 	
 	def get_response(self, req):
-		self.__class__.s.sendall(req)
-		data = self.__class__.s.recv(max_resp_size)
-		print 'Sent', repr(req)
-		print 'Recv', repr(data), "\n"
+		self.s.sendall(req)
+		data = self.s.recv(max_resp_size)
+		#print 'Sent', repr(req)
+		#print 'Recv', repr(data), "\n"
 		return data
 
 	def assertValidBase64(self, req):
@@ -48,7 +36,7 @@ class TestSecretStore(unittest.TestCase):
 		return self.assertFalse("error:" in response)
 	
 	def assertError(self, response, errormsg):
-		return self.assertTrue("error:" in response and errormsg in response)
+		return self.assertTrue("error:" in response and errormsg in response, errormsg)
 	
 	def getNewline(self):
 		if random.randint(0,1):
@@ -57,7 +45,7 @@ class TestSecretStore(unittest.TestCase):
 			return "\n"
 
 	def test_create_secret_get_secret(self):
-		for requested_secret_len in range(1, 100):
+		for requested_secret_len in range(1, 2000):
 			key_resp=self.get_response("%d%s" % (requested_secret_len, self.getNewline()))[:-2]
 			key_resp_len=len(key_resp)
 			self.assertNoError(key_resp)
@@ -80,13 +68,10 @@ class TestSecretStore(unittest.TestCase):
 	#define INVALID_REQUEST "error: request contains invalid characters"
 	#define EMPTY_REQUEST "error: zero length request"
 	#define REQUEST_TOO_LARGE "error: the request is too large"
-	def test_invalid_key_size(self):
-		key_resp=self.get_response("0\r\n")[:-2]
-		self.assertError(key_resp, "new secret size invalid")
 	
-	def test_invalid_secret_size(self):
-		key_resp=self.get_response("0\r\n")[:-2]
-		self.assertError(key_resp, "new secret size invalid")
+	def test_invalid_key_size(self):
+		resp=self.get_response("0\r\n")[:-2]
+		self.assertError(resp, "new secret size invalid")
 	
 	def test_key_not_exist(self):
 		key_resp=self.get_response("LOLzDlSD8zW1SGkANeucHVjdsYhJibVPhJvV/ah2Bs4=\r\n")[:-2]
@@ -101,21 +86,49 @@ class TestSecretStore(unittest.TestCase):
 			key_resp=self.get_response(newline)[:-2]
 			self.assertError(key_resp, "zero length request")
 	
-	def test_request_too_large(self):
-		#TODO
-		pass
-	
+	# needs investigation
 	def test_missing_newline(self):
-		print(str(time.time()))
+		start_time=time.time()
 		resp=self.get_response("123912391239")
-		print("missing newline (timeout?) resp: '%s'" % str(resp))
-		print(str(time.time()))
+		#print("missing newline (timeout?) resp: '%s'" % str(resp))
+		end_time=time.time()
+		#print("missing newline request took %s sec" % str(end_time-start_time))
 
 	def test_multiple_newlines(self):
-		print(str(time.time()))
+		#print(str(time.time()))
 		resp=self.get_response("12391239123\nfoobar\nhellowooo\n")
-		print("multiple newlines test resp: '%s'" % str(resp))
-		print(str(time.time()))
+		#print("multiple newlines test resp: '%s'" % str(resp))
+		#print(str(time.time()))
+		# TODO assert
 
+	def test_fuzz_large_commands(self):
+		for x in range(0,11):
+			#send exponetually larger strings.
+			resp=self.get_response("A"*(2^x)+"\n")
+			#make sure we have some kind of response. 
+			self.assertRegexpMatches(resp, "\n$","Incomplete response: '%s'" % str(resp))
+
+	def test_invalid_chars(self):
+		requested_secret_len=128
+		key_resp=self.get_response("%d\n" % (requested_secret_len))[:-2]
+		
+		# prepend fuzzed char to the key request
+		for char_i in range(0,128):
+			resp=self.get_response("%s%s\n" % (chr(char_i), key_resp))
+			#self.assertError(key_resp, "key not found during lookup: '%s'" % resp)
+			self.assertRegexpMatches(resp, "\n$","incomplete response: '%s'" % str(resp))
+		
+		# append fuzzed char to the key request
+		for char_i in range(0,128):
+			resp=self.get_response("%s%s\n" % (key_resp, chr(char_i)))
+			#self.assertError(resp, "key not found during lookup: '%s'" % resp)
+			self.assertRegexpMatches(resp, "\n$","incomplete response: '%s'" % str(resp))
+		
+		# just the char by itself
+		for char_i in range(0,128):
+			resp=self.get_response("%s\n" % (chr(char_i)))
+			self.assertRegexpMatches(resp, "\n$","incomplete response: '%s'" % str(resp))	
+		
+		
 if __name__ == '__main__':
 	unittest.main()

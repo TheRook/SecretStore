@@ -3,6 +3,7 @@ import socket
 import random
 import unittest
 import base64
+import time
 
 host='localhost'
 port=40713
@@ -49,9 +50,15 @@ class TestSecretStore(unittest.TestCase):
 	def assertError(self, response, errormsg):
 		return self.assertTrue("error:" in response and errormsg in response)
 	
+	def getNewline(self):
+		if random.randint(0,1):
+			return "\r\n"
+		else:
+			return "\n"
+
 	def test_create_secret_get_secret(self):
 		for requested_secret_len in range(1, 100):
-			key_resp=self.get_response("%d\r\n" % requested_secret_len)[:-2]
+			key_resp=self.get_response("%d%s" % (requested_secret_len, self.getNewline()))[:-2]
 			key_resp_len=len(key_resp)
 			self.assertNoError(key_resp)
 			self.assertValidBase64(key_resp)
@@ -60,7 +67,7 @@ class TestSecretStore(unittest.TestCase):
 			bin_key=base64.b64decode(key_resp)
 			self.assertEquals(len(bin_key), expected_bin_key_size_bytes)
 			
-			secret_resp=self.get_response("%s\r\n" % key_resp)[:-2]
+			secret_resp=self.get_response("%s%s" % (key_resp, self.getNewline()))[:-2]
 			self.assertNoError(secret_resp)
 			self.assertValidBase64(secret_resp)
 			
@@ -90,12 +97,25 @@ class TestSecretStore(unittest.TestCase):
 		self.assertError(key_resp, "request contains invalid characters")
 	
 	def test_empty_request(self):
-		key_resp=self.get_response("\r\n")[:-2]
-		self.assertError(key_resp, "zero length request")
+		for newline in ["\r\n","\n"]:
+			key_resp=self.get_response(newline)[:-2]
+			self.assertError(key_resp, "zero length request")
 	
 	def test_request_too_large(self):
 		#TODO
 		pass
 	
+	def test_missing_newline(self):
+		print(str(time.time()))
+		resp=self.get_response("123912391239")
+		print("missing newline (timeout?) resp: '%s'" % str(resp))
+		print(str(time.time()))
+
+	def test_multiple_newlines(self):
+		print(str(time.time()))
+		resp=self.get_response("12391239123\nfoobar\nhellowooo\n")
+		print("multiple newlines test resp: '%s'" % str(resp))
+		print(str(time.time()))
+
 if __name__ == '__main__':
 	unittest.main()

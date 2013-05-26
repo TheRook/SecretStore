@@ -107,7 +107,7 @@ get_secret(leveldb_t* store, char* key_bin, size_t key_len) {
 	return resp_b64;
 }
 
-//the return value is not null terminated.
+//the return value is null terminated.
 char *
 get_nonce(int size){
 	char* buf;
@@ -135,7 +135,8 @@ new_secret(leveldb_t *store, size_t size){
 	return resp;
 }
 
-static void cleanup_cb(struct bufferevent *bev, short events, void *ctx){
+static void
+cleanup_cb(struct bufferevent *bev, short events, void *ctx){
 	if (events & BEV_EVENT_ERROR)
 		perror("Error from bufferevent");
 	if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {

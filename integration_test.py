@@ -45,22 +45,26 @@ class TestSecretStore(unittest.TestCase):
 			return "\n"
 
 	def test_create_secret_get_secret(self):
-		for requested_secret_len in range(1, 2000):
-			key_resp=self.get_response("%d%s" % (requested_secret_len, self.getNewline()))[:-2]
-			key_resp_len=len(key_resp)
-			self.assertNoError(key_resp)
-			self.assertValidBase64(key_resp)
-			self.assertEquals(key_resp_len, expected_b64_key_size_bytes)
-		
-			bin_key=base64.b64decode(key_resp)
-			self.assertEquals(len(bin_key), expected_bin_key_size_bytes)
+		new_secret_max=100
+		num_iterations=100
+		for i in range(0, num_iterations): 
+			for requested_secret_len in range(1, new_secret_max):
+				key_resp=self.get_response("%d%s" % (requested_secret_len, self.getNewline()))[:-2]
+				key_resp_len=len(key_resp)
+				print("Key resp is: '%s', assert no error..." % str(key_resp))
+				self.assertNoError(key_resp)
+				self.assertValidBase64(key_resp)
+				self.assertEquals(key_resp_len, expected_b64_key_size_bytes)
+				
+				bin_key=base64.b64decode(key_resp)
+				self.assertEquals(len(bin_key), expected_bin_key_size_bytes)
+				
+				secret_resp=self.get_response("%s%s" % (key_resp, self.getNewline()))[:-2]
+				self.assertNoError(secret_resp)
+				self.assertValidBase64(secret_resp)
 			
-			secret_resp=self.get_response("%s%s" % (key_resp, self.getNewline()))[:-2]
-			self.assertNoError(secret_resp)
-			self.assertValidBase64(secret_resp)
-			
-			bin_secret=base64.b64decode(secret_resp)
-			self.assertEquals(len(bin_secret), requested_secret_len)
+				bin_secret=base64.b64decode(secret_resp)
+				self.assertEquals(len(bin_secret), requested_secret_len)
 	
 	#define INVALID_KEY_SIZE "error: invalid key size for lookup"
 	#define INVALID_SECRET_SIZE "error: new secret size invalid"

@@ -21,8 +21,8 @@
 
 void
 proto_handler(struct bufferevent *request, short events, void* arg){
-	struct accept_args* args=(struct accept_args*)arg;
-	leveldb_t* store=(leveldb_t*)args->store;
+	//struct accept_args* args=(struct accept_args*)arg; // TODO figure out arg
+	leveldb_t* store=global_store;
 	char buffer_test[1];
 	struct evbuffer *bucket= bufferevent_get_input(request);
 	struct evbuffer *output=bufferevent_get_output(request);
@@ -169,7 +169,7 @@ do_accept(evutil_socket_t listener, short event, void *arg){
 		 * (in this case: proto_handler) is executed when the client has
 		 * sent data which is available to be read on the fd
 		 */
-		bufferevent_setcb(bev, proto_handler, NULL, cleanup_cb, arg);
+		bufferevent_setcb(bev, proto_handler, NULL, cleanup_cb, NULL); // TODO arg?
 		bufferevent_enable(bev, EV_READ|EV_WRITE);
 
     }
@@ -224,6 +224,7 @@ int
 main(int c, char** v) {
 	struct parsed_config config;
     leveldb_t* store;
+    global_store=NULL;
 
 	config = parse_config(CONFIG_FILE_PATH);
 	if(!config.is_valid){
@@ -233,7 +234,8 @@ main(int c, char** v) {
 
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("Opening database at %s...\n", config.db_path);
-    store=store_open(config.db_path);
+    global_store=store=store_open(config.db_path);
+
     run(store, config.port);
     //malloc'ed by parse_config(),  free it here:
     free_config_strings(&config);
